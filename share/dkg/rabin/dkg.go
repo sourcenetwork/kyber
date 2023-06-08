@@ -96,8 +96,10 @@ type Deal struct {
 type Response struct {
 	// Index of the Dealer for which this response is for
 	Index uint32
+	// Target uint32
 	// Response issued from another participant
 	Response *vss.Response
+	Target   uint32
 }
 
 // Justification holds the Justification from a Dealer as well as the index of
