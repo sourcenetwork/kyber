@@ -8,24 +8,26 @@
 // verifier can check the validity of the received share. The protocol has the
 // following steps:
 //
-//   1) The dealer send a Deal to every verifiers using `Deals()`. Each deal must
-//   be sent securely to one verifier whose public key is at the same index than
-//   the index of the Deal.
+//  1. The dealer send a Deal to every verifiers using `Deals()`. Each deal must
+//     be sent securely to one verifier whose public key is at the same index than
+//     the index of the Deal.
 //
-//   2) Each verifier processes the Deal with `ProcessDeal`.
-//   This function returns a Response which can be twofold:
-//   - an approval, to confirm a correct deal
-//   - a complaint to announce an incorrect deal notifying others that the
+//  2. Each verifier processes the Deal with `ProcessDeal`.
+//     This function returns a Response which can be twofold:
+//     - an approval, to confirm a correct deal
+//     - a complaint to announce an incorrect deal notifying others that the
 //     dealer might be malicious.
-//	 All Responses must be broadcasted to every verifiers and the dealer.
-//   3) The dealer can respond to each complaint by a justification revealing the
-//   share he originally sent out to the accusing verifier. This is done by
-//   calling `ProcessResponse` on the `Dealer`.
-//   4) The verifiers refuse the shared secret and abort the protocol if there
-//   are at least t complaints OR if a Justification is wrong. The verifiers
-//   accept the shared secret if there are at least t approvals at which point
-//   any t out of n verifiers can reveal their shares to reconstruct the shared
-//   secret.
+//     All Responses must be broadcasted to every verifiers and the dealer.
+//
+//  3. The dealer can respond to each complaint by a justification revealing the
+//     share he originally sent out to the accusing verifier. This is done by
+//     calling `ProcessResponse` on the `Dealer`.
+//
+//  4. The verifiers refuse the shared secret and abort the protocol if there
+//     are at least t complaints OR if a Justification is wrong. The verifiers
+//     accept the shared secret if there are at least t approvals at which point
+//     any t out of n verifiers can reveal their shares to reconstruct the shared
+//     secret.
 package vss
 
 import (
@@ -69,6 +71,10 @@ type Dealer struct {
 	// list of deals this Dealer has generated
 	deals []*Deal
 	*aggregator
+
+	// private polynomials
+	f *share.PriPoly
+	g *share.PriPoly
 }
 
 // Deal encapsulates the verifiable secret share and is sent by the dealer to a verifier.
@@ -133,7 +139,7 @@ type Justification struct {
 // RECOMMENDED to use a threshold higher or equal than what the method
 // MinimumT() returns, otherwise it breaks the security assumptions of the whole
 // scheme. It returns an error if the t is inferior or equal to 2.
-func NewDealer(suite Suite, longterm, secret kyber.Scalar, verifiers []kyber.Point, t int) (*Dealer, error) {
+func NewDealer(suite Suite, longterm, secret kyber.Scalar, verifiers []kyber.Point, t int, opts ...DealerOption) (*Dealer, error) {
 	d := &Dealer{
 		suite:     suite,
 		long:      longterm,
@@ -145,15 +151,24 @@ func NewDealer(suite Suite, longterm, secret kyber.Scalar, verifiers []kyber.Poi
 	}
 	d.t = t
 
+	// default options will set the f and g polys
+	// but they may be overridden with user defined
+	// polys via the opts
+	opts = append(DefaultOptions(), opts...)
+	for _, o := range opts {
+		err := o(d)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	H := deriveH(d.suite, d.verifiers)
-	f := share.NewPriPoly(d.suite, d.t, d.secret, suite.RandomStream())
-	g := share.NewPriPoly(d.suite, d.t, nil, suite.RandomStream())
 	d.pub = d.suite.Point().Mul(d.long, nil)
 
 	// Compute public polynomial coefficients
-	F := f.Commit(d.suite.Point().Base())
+	F := d.f.Commit(d.suite.Point().Base())
 	_, d.secretCommits = F.Info()
-	G := g.Commit(H)
+	G := d.g.Commit(H)
 
 	C, err := F.Add(G)
 	if err != nil {
@@ -170,8 +185,8 @@ func NewDealer(suite Suite, longterm, secret kyber.Scalar, verifiers []kyber.Poi
 	// C = F + G
 	d.deals = make([]*Deal, len(d.verifiers))
 	for i := range d.verifiers {
-		fi := f.Eval(i)
-		gi := g.Eval(i)
+		fi := d.f.Eval(i)
+		gi := d.g.Eval(i)
 		d.deals[i] = &Deal{
 			SessionID:   d.sessionID,
 			SecShare:    fi,
@@ -311,6 +326,21 @@ func (d *Dealer) SessionID() []byte {
 // responded until now.
 func (d *Dealer) SetTimeout() {
 	d.aggregator.cleanVerifiers()
+}
+
+// Secret returns the polynomial secret value
+func (d *Dealer) Secret() kyber.Scalar {
+	return d.secret
+}
+
+// F returns the cooresponding private polynomial
+func (d *Dealer) FPoly() *share.PriPoly {
+	return d.f
+}
+
+// G returns the cooresponsion private polynomial
+func (d *Dealer) GPoly() *share.PriPoly {
+	return d.g
 }
 
 // Verifier receives a Deal from a Dealer, can reply with a Complaint, and can

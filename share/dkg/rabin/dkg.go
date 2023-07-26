@@ -183,7 +183,7 @@ type DistKeyGenerator struct {
 // the longterm secret key, the list of participants, and the
 // threshold t parameter. It returns an error if the secret key's
 // commitment can't be found in the list of participants.
-func NewDistKeyGenerator(suite Suite, longterm kyber.Scalar, participants []kyber.Point, t int) (*DistKeyGenerator, error) {
+func NewDistKeyGenerator(suite Suite, longterm kyber.Scalar, participants []kyber.Point, t int, opts ...DKGOption) (*DistKeyGenerator, error) {
 	pub := suite.Point().Mul(longterm, nil)
 	// find our index
 	var found bool
@@ -198,16 +198,8 @@ func NewDistKeyGenerator(suite Suite, longterm kyber.Scalar, participants []kybe
 	if !found {
 		return nil, errors.New("dkg: own public key not found in list of participants")
 	}
-	var err error
-	// generate our dealer / deal
-	ownSec := suite.Scalar().Pick(suite.RandomStream())
-	dealer, err := vss.NewDealer(suite, longterm, ownSec, participants, t)
-	if err != nil {
-		return nil, err
-	}
 
-	return &DistKeyGenerator{
-		dealer:             dealer,
+	d := &DistKeyGenerator{
 		verifiers:          make(map[uint32]*vss.Verifier),
 		commitments:        make(map[uint32]*share.PubPoly),
 		pendingReconstruct: make(map[uint32][]*ReconstructCommits),
@@ -218,7 +210,20 @@ func NewDistKeyGenerator(suite Suite, longterm kyber.Scalar, participants []kybe
 		pub:                pub,
 		participants:       participants,
 		index:              index,
-	}, nil
+	}
+
+	// merge any defined opts into the default set of options
+	opts = append(DefaultOptions(), opts...)
+	// evaluate all the opts
+	for _, o := range opts {
+		err := o(d)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// options
+	return d, nil
 }
 
 // Deals returns all the deals that must be broadcasted to all
@@ -610,6 +615,11 @@ func (d *DistKeyGenerator) Finished() bool {
 		return true
 	})
 	return nb >= d.t && ret
+}
+
+// Dealer returns the underlying vss.Dealer
+func (d *DistKeyGenerator) Dealer() *vss.Dealer {
+	return d.dealer
 }
 
 // DistKeyShare generates the distributed key relative to this receiver
